@@ -189,6 +189,8 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
   const clearSelection = () => {
     setSelectedFid(null);
     setHighlightGeoFid(null);
+    setSearchInput('');
+    setSearch('');
   };
 
   const fullBounds = useMemo(() => {
