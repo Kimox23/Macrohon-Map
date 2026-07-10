@@ -30,5 +30,8 @@
     "rules": {
       "recommended": true
     }
+  },
+  "files": {
+    "maxSize": 5000000
   }
 }
