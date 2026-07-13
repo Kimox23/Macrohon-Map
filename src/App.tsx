@@ -2,7 +2,7 @@ import macrohonGeoJson from './data/Macrohon.json';
 import macrohonTextGeoJson from './data/Macrohon_Text.json';
 import MapView from './MapView';
 import './App.css';
-import type { FeatureCollection, Geometry, GeoJsonProperties } from 'geojson';
+import type { FeatureCollection, GeoJsonProperties, Geometry } from 'geojson';
 
 const App = () => {
   return (

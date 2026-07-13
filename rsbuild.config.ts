@@ -5,14 +5,4 @@ import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss';
 // Docs: https://rsbuild.rs/config/
 export default defineConfig({
   plugins: [pluginReact(), pluginTailwindcss()],
-  rspack: {
-    module: {
-      rules: [
-        {
-          test: /\.geojson$/,
-          type: 'json',
-        },
-      ],
-    },
-  },
 });

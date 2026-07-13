@@ -1,11 +1,11 @@
-import MapGL, { Layer, Source, type MapRef } from 'react-map-gl/maplibre';
+import MapGL, { Layer, type MapRef, Source } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import 'maplibre-compass-pro/dist/style.css';
 import { Compass } from 'maplibre-compass-pro';
-import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GeoJSONFeature, StyleSpecification } from 'maplibre-gl';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-const MAP_STYLE = {
+const LIGHT_STYLE = {
   version: 8 as const,
   sources: {
     'carto-tiles': {
@@ -25,6 +25,29 @@ const MAP_STYLE = {
       id: 'carto-tiles-layer',
       type: 'raster',
       source: 'carto-tiles',
+      minzoom: 0,
+      maxzoom: 19,
+    },
+  ],
+};
+
+const MAPTILER_SATELLITE_STYLE = {
+  version: 8 as const,
+  sources: {
+    'maptiler-tiles': {
+      type: 'raster',
+      tiles: [
+        'https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=' + import.meta.env.PUBLIC_MAPTILER_API_KEY,
+      ],
+      tileSize: 256,
+      attribution: '© MapTiler © OpenStreetMap contributors',
+    },
+  },
+  layers: [
+    {
+      id: 'maptiler-tiles-layer',
+      type: 'raster',
+      source: 'maptiler-tiles',
       minzoom: 0,
       maxzoom: 19,
     },
@@ -157,9 +180,9 @@ function computeLineDirection(
       const len = dx * dx + dy * dy;
       if (len > maxLen) {
         maxLen = len;
-        const dLon = dx * Math.PI / 180;
-        const lat1 = line[i - 1][1] * Math.PI / 180;
-        const lat2 = line[i][1] * Math.PI / 180;
+        const dLon = (dx * Math.PI) / 180;
+        const lat1 = (line[i - 1][1] * Math.PI) / 180;
+        const lat2 = (line[i][1] * Math.PI) / 180;
         const y = Math.sin(dLon) * Math.cos(lat2);
         const x =
           Math.cos(lat1) * Math.sin(lat2) -
@@ -189,6 +212,9 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
       ? !window.matchMedia('(max-width: 1023px)').matches
       : true,
   );
+  const [mapStyle, setMapStyle] = useState<
+    'light' | 'maptiler-satellite'
+  >('light');
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1023px)');
@@ -359,6 +385,7 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
     }
   }, [selectedFid, markerFeatures]);
 
+
   return (
     <div className="relative h-[100dvh] w-screen overflow-hidden">
       <input
@@ -368,6 +395,19 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
         onChange={(e) => setSearchInput(e.target.value)}
         className="absolute top-2.5 left-2.5 z-20 max-w-[calc(100%-1.25rem)] rounded border border-[#ccc] bg-white px-3 py-2 shadow sm:w-[250px]"
       />
+      <select
+        value={mapStyle}
+        onChange={(e) =>
+          setMapStyle(
+            e.target.value as 'light' | 'maptiler-satellite',
+          )
+        }
+        className="absolute top-2.5 right-2.5 z-20 rounded bg-white/90 px-2 py-1 shadow text-xs font-medium"
+        aria-label="Map style"
+      >
+        <option value="light">Map</option>
+        <option value="maptiler-satellite">MapTiler Satellite</option>
+      </select>
       <div className="absolute inset-0">
         <MapGL
           ref={mapRef}
@@ -377,7 +417,11 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
             zoom: 12,
           }}
           style={{ width: '100%', height: '100%' }}
-          mapStyle={MAP_STYLE as StyleSpecification}
+          mapStyle={
+            (mapStyle === 'light'
+              ? LIGHT_STYLE
+              : MAPTILER_SATELLITE_STYLE) as StyleSpecification
+          }
           dragRotate={true}
           onLoad={handleMapLoad}
           onMouseMove={(e) => {
@@ -505,11 +549,10 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
         </button>
       )}
       <aside
-        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${
-          sidebarOpen
-            ? 'translate-y-0 max-lg:translate-y-0'
-            : 'max-lg:translate-y-full lg:-translate-x-full'
-        }`}
+        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${sidebarOpen
+          ? 'translate-y-0 max-lg:translate-y-0'
+          : 'max-lg:translate-y-full lg:-translate-x-full'
+          }`}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
           <span className="text-sm font-semibold">Markers ({total})</span>
