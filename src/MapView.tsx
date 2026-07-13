@@ -1,5 +1,7 @@
 import MapGL, { Layer, Source, type MapRef } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import 'maplibre-compass-pro/dist/style.css';
+import { Compass } from 'maplibre-compass-pro';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GeoJSONFeature, StyleSpecification } from 'maplibre-gl';
 
@@ -139,12 +141,71 @@ function findNearestFeature(
   return best;
 }
 
+function computeLineDirection(
+  geom: GeoJSON.MultiLineString,
+): 'N' | 'S' | 'E' | 'W' | null {
+  const lines = geom.coordinates;
+  if (!lines.length) return null;
+
+  let maxLen = -Infinity;
+  let bestBearing = 0;
+
+  for (const line of lines) {
+    for (let i = 1; i < line.length; i++) {
+      const dx = line[i][0] - line[i - 1][0];
+      const dy = line[i][1] - line[i - 1][1];
+      const len = dx * dx + dy * dy;
+      if (len > maxLen) {
+        maxLen = len;
+        const dLon = dx * Math.PI / 180;
+        const lat1 = line[i - 1][1] * Math.PI / 180;
+        const lat2 = line[i][1] * Math.PI / 180;
+        const y = Math.sin(dLon) * Math.cos(lat2);
+        const x =
+          Math.cos(lat1) * Math.sin(lat2) -
+          Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+        bestBearing = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+      }
+    }
+  }
+
+  if (maxLen <= 0) return null;
+
+  if (bestBearing >= 315 || bestBearing < 45) return 'N';
+  if (bestBearing >= 45 && bestBearing < 135) return 'E';
+  if (bestBearing >= 135 && bestBearing < 225) return 'S';
+  return 'W';
+}
+
 const MapView = ({ geojson, textGeojson }: MapViewProps) => {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [selectedFid, setSelectedFid] = useState<number | null>(null);
   const [highlightGeoFid, setHighlightGeoFid] = useState<number | null>(null);
   const mapRef = useRef<MapRef | null>(null);
+  const compassRef = useRef<Compass | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined'
+      ? !window.matchMedia('(max-width: 1023px)').matches
+      : true,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1023px)');
+    const handler = (e: MediaQueryListEvent) => setSidebarOpen(!e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  const handleMapLoad = () => {
+    const instance = mapRef.current?.getMap();
+    if (!instance || compassRef.current) return;
+    compassRef.current = new Compass({
+      size: 'md',
+      displayDirection: true,
+    });
+    instance.addControl(compassRef.current, 'top-right');
+  };
 
   const selectFeature = (feature: GeoJSON.Feature) => {
     const instance = mapRef.current?.getMap();
@@ -218,15 +279,6 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
   }, [highlightGeoFid]);
 
   useEffect(() => {
-    const instance = mapRef.current?.getMap();
-    if (!instance) return;
-
-    if (fullBounds) {
-      instance.fitBounds(fullBounds, { padding: 50 });
-    }
-  }, [fullBounds]);
-
-  useEffect(() => {
     const timer = setTimeout(() => setSearch(searchInput), 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
@@ -238,6 +290,28 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
       features: textGeojson.features.filter((f) => matches(f, search)),
     };
   }, [textGeojson, search]);
+
+  const directionGeojson = useMemo(() => {
+    if (!geojson) return null;
+    return {
+      type: 'FeatureCollection' as const,
+      features: geojson.features
+        .map((f) => {
+          const dir = computeLineDirection(
+            f.geometry as GeoJSON.MultiLineString,
+          );
+          if (!dir) return null;
+          return {
+            ...f,
+            properties: {
+              ...f.properties,
+              direction: dir,
+            },
+          };
+        })
+        .filter(Boolean) as GeoJSON.Feature[],
+    };
+  }, [geojson]);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -304,6 +378,8 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
           }}
           style={{ width: '100%', height: '100%' }}
           mapStyle={MAP_STYLE as StyleSpecification}
+          dragRotate={true}
+          onLoad={handleMapLoad}
           onMouseMove={(e) => {
             const instance = mapRef.current?.getMap();
             if (!instance) return;
@@ -392,20 +468,70 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
               />
             </Source>
           )}
+          {directionGeojson && (
+            <Source id="direction-data" type="geojson" data={directionGeojson}>
+              <Layer
+                id="direction-label"
+                type="symbol"
+                minzoom={16}
+                layout={{
+                  'text-field': ['get', 'direction'],
+                  'text-font': [
+                    'Open Sans Regular',
+                    'Arial Unicode MS Regular',
+                  ],
+                  'text-size': 10,
+                  'text-anchor': 'center',
+                  'text-allow-overlap': false,
+                }}
+                paint={{
+                  'text-color': '#666666',
+                  'text-halo-color': '#ffffff',
+                  'text-halo-width': 1,
+                }}
+              />
+            </Source>
+          )}
         </MapGL>
       </div>
-      <aside className="absolute z-10 flex flex-col bg-white/95 shadow-xl max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80">
+      {!sidebarOpen && (
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          className="absolute z-20 rounded bg-white/90 px-2 py-1 shadow max-lg:bottom-4 max-lg:right-4 max-lg:text-sm lg:top-1/2 lg:right-4 lg:-translate-y-1/2 lg:text-base"
+          aria-label="Open sidebar"
+        >
+          ☰
+        </button>
+      )}
+      <aside
+        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${
+          sidebarOpen
+            ? 'translate-y-0 max-lg:translate-y-0'
+            : 'max-lg:translate-y-full lg:-translate-x-full'
+        }`}
+      >
         <div className="flex items-center justify-between border-b px-4 py-3">
           <span className="text-sm font-semibold">Markers ({total})</span>
-          {selectedFid != null && (
+          <div className="flex items-center gap-2">
+            {selectedFid != null && (
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="text-xs font-medium text-blue-600 hover:underline"
+              >
+                Clear
+              </button>
+            )}
             <button
               type="button"
-              onClick={clearSelection}
-              className="text-xs font-medium text-blue-600 hover:underline"
+              onClick={() => setSidebarOpen(false)}
+              className="text-gray-500 hover:text-gray-700"
+              aria-label="Close sidebar"
             >
-              Clear
+              ✕
             </button>
-          )}
+          </div>
         </div>
         <div
           ref={listRef}

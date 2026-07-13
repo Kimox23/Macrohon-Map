@@ -9,3 +9,25 @@ body {
   margin: 0;
   padding: 0;
 }
+
+.compass-pro-wrapper {
+  position: fixed !important;
+}
+
+@media (min-width: 1024px) {
+  .compass-pro-wrapper {
+    left: 1rem !important;
+    bottom: 1rem !important;
+    top: auto !important;
+    right: auto !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  .compass-pro-wrapper {
+    right: 1rem !important;
+    top: 1rem !important;
+    bottom: auto !important;
+    left: auto !important;
+  }
+}
