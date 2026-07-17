@@ -40,7 +40,7 @@ const MAPTILER_SATELLITE_STYLE = {
       type: 'raster',
       tiles: [
         'https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=' +
-          import.meta.env.PUBLIC_MAPTILER_API_KEY,
+        import.meta.env.PUBLIC_MAPTILER_API_KEY,
       ],
       tileSize: 256,
       attribution: '© MapTiler © OpenStreetMap contributors',
@@ -216,8 +216,16 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
       : true,
   );
   const [mapStyle, setMapStyle] = useState<'light' | 'maptiler-satellite'>(
-    'light',
+    () => {
+      if (typeof window === 'undefined') return 'light';
+      const stored = window.localStorage.getItem('mapStyle');
+      return stored === 'maptiler-satellite' ? 'maptiler-satellite' : 'light';
+    },
   );
+
+  useEffect(() => {
+    window.localStorage.setItem('mapStyle', mapStyle);
+  }, [mapStyle]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1023px)');
@@ -416,6 +424,9 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
             latitude: 10.076847,
             zoom: 12,
           }}
+          projection={{
+            type: "globe"
+          }}
           maxTileCacheSize={100_000_000}
           style={{ width: '100%', height: '100%' }}
           mapStyle={
@@ -550,11 +561,10 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
         </button>
       )}
       <aside
-        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${
-          sidebarOpen
+        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${sidebarOpen
             ? 'translate-y-0 max-lg:translate-y-0'
             : 'max-lg:translate-y-full lg:-translate-x-full'
-        }`}
+          }`}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
           <span className="text-sm font-semibold">Markers ({total})</span>
@@ -597,11 +607,10 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
                     top: index * ITEM_HEIGHT,
                     height: ITEM_HEIGHT,
                   }}
-                  className={`left-0 right-0 block border-b border-gray-100 px-3 py-2 text-left text-xs hover:bg-gray-100 ${
-                    isSelected
+                  className={`left-0 right-0 block border-b border-gray-100 px-3 py-2 text-left text-xs hover:bg-gray-100 ${isSelected
                       ? 'bg-blue-50 ring-2 ring-inset ring-blue-500'
                       : ''
-                  }`}
+                    }`}
                 >
                   <div className="truncate font-medium text-gray-900">
                     {String(

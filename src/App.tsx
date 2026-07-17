@@ -1,5 +1,6 @@
 import type { FeatureCollection, GeoJsonProperties, Geometry } from 'geojson';
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { FiLoader } from 'react-icons/fi';
 import './App.css';
 
 const MapView = lazy(() => import('./MapView'));
@@ -8,6 +9,28 @@ const DATA_URLS = {
   geojson: `${import.meta.env.BASE_URL}data/Macrohon.json`,
   textGeojson: `${import.meta.env.BASE_URL}data/Macrohon_Text.json`,
 };
+
+const LoadingScreen = ({ message }: { message: string }) => (
+  <div className="flex h-[100dvh] w-screen flex-col items-center justify-center gap-5 bg-[#f2efe9]">
+    <div className="relative flex items-center justify-center">
+      <span className="absolute inline-flex h-24 w-24 animate-ping rounded-full bg-blue-500/20" />
+      <img
+        src={`${import.meta.env.BASE_URL}favicon.png`}
+        alt="Macrohon Cadastral logo"
+        className="relative h-20 w-20 rounded-2xl bg-white p-2 shadow-lg"
+      />
+    </div>
+    <div className="flex flex-col items-center gap-2">
+      <span className="text-lg font-semibold tracking-tight text-gray-800">
+        Macrohon Cadastral
+      </span>
+      <div className="flex items-center gap-2 text-sm text-gray-500">
+        <FiLoader className="animate-spin" aria-hidden="true" />
+        <span>{message}</span>
+      </div>
+    </div>
+  </div>
+);
 
 const App = () => {
   const [geojson, setGeojson] = useState<FeatureCollection<
@@ -37,23 +60,13 @@ const App = () => {
   }, []);
 
   if (!geojson || !textGeojson) {
-    return (
-      <div className="flex h-[100dvh] w-screen items-center justify-center bg-[#f2efe9] text-sm text-gray-500">
-        Loading map…
-      </div>
-    );
+    return <LoadingScreen message="Loading map data…" />;
   }
 
   return (
     <>
       <title>Macrohon Cadastral</title>
-      <Suspense
-        fallback={
-          <div className="flex h-[100dvh] w-screen items-center justify-center bg-[#f2efe9] text-sm text-gray-500">
-            Loading map…
-          </div>
-        }
-      >
+      <Suspense fallback={<LoadingScreen message="Preparing map…" />}>
         <MapView geojson={geojson} textGeojson={textGeojson} />
       </Suspense>
     </>
