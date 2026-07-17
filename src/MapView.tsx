@@ -2,7 +2,11 @@ import MapGL, { Layer, type MapRef, Source } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import 'maplibre-compass-pro/dist/style.css';
 import { Compass } from 'maplibre-compass-pro';
-import type { GeoJSONFeature, StyleSpecification } from 'maplibre-gl';
+import type {
+  ExpressionSpecification,
+  GeoJSONFeature,
+  StyleSpecification,
+} from 'maplibre-gl';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const LIGHT_STYLE = {
@@ -60,6 +64,7 @@ const MAPTILER_SATELLITE_STYLE = {
 type MapViewProps = {
   geojson: GeoJSON.FeatureCollection;
   textGeojson: GeoJSON.FeatureCollection;
+  boundaryGeojson: GeoJSON.FeatureCollection;
 };
 
 function getFeatureBounds(
@@ -203,7 +208,190 @@ function computeLineDirection(
   return 'W';
 }
 
-const MapView = ({ geojson, textGeojson }: MapViewProps) => {
+const BOUNDARY_PALETTE = [
+  '#e6194b',
+  '#3cb44b',
+  '#4363d8',
+  '#f58231',
+  '#911eb4',
+  '#46f0f0',
+  '#f032e6',
+  '#bcf60c',
+  '#fabebe',
+  '#008080',
+  '#e6beff',
+  '#9a6324',
+  '#800000',
+  '#aaffc3',
+  '#808000',
+  '#ffd8b1',
+  '#000075',
+  '#a9a9a9',
+  '#ff4500',
+  '#2e8b57',
+];
+
+// Stable ordered list of unique barangay names from the boundary data.
+function getBoundaryNames(fc: GeoJSON.FeatureCollection): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const f of fc.features) {
+    const name = f.properties?.name;
+    if (typeof name === 'string' && !seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+// Map each barangay name to a palette color (cycling when needed).
+function buildBoundaryColorLookup(names: string[]): Map<string, string> {
+  const lookup = new Map<string, string>();
+  names.forEach((name, i) => {
+    lookup.set(name, BOUNDARY_PALETTE[i % BOUNDARY_PALETTE.length]);
+  });
+  return lookup;
+}
+
+// Darken a hex color enough to stay readable as text on a white halo.
+// Scales the color down and clamps its perceived luminance below a ceiling.
+function darkenHex(hex: string): string {
+  const m = hex.replace('#', '');
+  let r = Number.parseInt(m.slice(0, 2), 16);
+  let g = Number.parseInt(m.slice(2, 4), 16);
+  let b = Number.parseInt(m.slice(4, 6), 16);
+  // Relative luminance (0-255 scale).
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const MAX_LUM = 140;
+  if (lum > MAX_LUM) {
+    const scale = MAX_LUM / lum;
+    r = Math.round(r * scale);
+    g = Math.round(g * scale);
+    b = Math.round(b * scale);
+  }
+  const toHex = (v: number) => v.toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+// Build a MapLibre `match` color expression keyed on the given property.
+function buildColorMatch(
+  names: string[],
+  property: string,
+  transform?: (color: string) => string,
+): ExpressionSpecification {
+  const lookup = buildBoundaryColorLookup(names);
+  const stops: string[] = [];
+  for (const name of names) {
+    const color = lookup.get(name);
+    if (color) stops.push(name, transform ? transform(color) : color);
+  }
+  const fallback = '#7c3aed';
+  return [
+    'match',
+    ['get', property],
+    ...stops,
+    transform ? transform(fallback) : fallback,
+  ] as unknown as ExpressionSpecification;
+}
+
+// Ray-casting point-in-polygon test for a single linear ring.
+function pointInRing(lon: number, lat: number, ring: number[][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersect =
+      yi > lat !== yj > lat &&
+      lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// Point-in-polygon for a MultiPolygon (respecting holes).
+function pointInMultiPolygon(
+  lon: number,
+  lat: number,
+  coords: number[][][][],
+): boolean {
+  for (const polygon of coords) {
+    if (!polygon.length) continue;
+    if (pointInRing(lon, lat, polygon[0])) {
+      let inHole = false;
+      for (let h = 1; h < polygon.length; h++) {
+        if (pointInRing(lon, lat, polygon[h])) {
+          inHole = true;
+          break;
+        }
+      }
+      if (!inHole) return true;
+    }
+  }
+  return false;
+}
+
+// Representative point for a feature: Point coords, or the average of a
+// feature's coordinates (good enough for barangay assignment).
+function representativePoint(
+  feature: GeoJSON.Feature,
+): [number, number] | null {
+  const geom = feature.geometry;
+  if (!geom) return null;
+  if (geom.type === 'Point') {
+    return geom.coordinates as [number, number];
+  }
+  const bounds = getFeatureBounds(feature);
+  if (!bounds) return null;
+  return [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2];
+}
+
+// Find which barangay a lon/lat falls into.
+function findBoundaryName(
+  lon: number,
+  lat: number,
+  boundary: GeoJSON.FeatureCollection,
+): string | null {
+  for (const f of boundary.features) {
+    const name = f.properties?.name;
+    if (typeof name !== 'string') continue;
+    const geom = f.geometry;
+    if (geom?.type === 'MultiPolygon') {
+      if (pointInMultiPolygon(lon, lat, geom.coordinates as number[][][][])) {
+        return name;
+      }
+    } else if (geom?.type === 'Polygon') {
+      if (pointInMultiPolygon(lon, lat, [geom.coordinates as number[][][]])) {
+        return name;
+      }
+    }
+  }
+  return null;
+}
+
+// Tag every feature with the barangay `boundaryName` it falls within.
+function tagWithBoundary(
+  fc: GeoJSON.FeatureCollection,
+  boundary: GeoJSON.FeatureCollection,
+): GeoJSON.FeatureCollection {
+  return {
+    ...fc,
+    features: fc.features.map((f) => {
+      const pt = representativePoint(f);
+      const boundaryName = pt
+        ? findBoundaryName(pt[0], pt[1], boundary)
+        : null;
+      return {
+        ...f,
+        properties: { ...f.properties, boundaryName },
+      };
+    }),
+  };
+}
+
+const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [selectedFid, setSelectedFid] = useState<number | null>(null);
@@ -295,6 +483,44 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
     return computeBounds(geojson) || computeBounds(textGeojson);
   }, [geojson, textGeojson]);
 
+  const boundaryNames = useMemo(
+    () => getBoundaryNames(boundaryGeojson),
+    [boundaryGeojson],
+  );
+
+  const boundaryColor = useMemo(
+    () => buildColorMatch(boundaryNames, 'name'),
+    [boundaryNames],
+  );
+
+  // Darker variant for boundary name labels.
+  const boundaryLabelColor = useMemo(
+    () => buildColorMatch(boundaryNames, 'name', darkenHex),
+    [boundaryNames],
+  );
+
+  // Color for parcels/labels keyed on the barangay they fall within.
+  const featureColor = useMemo(
+    () => buildColorMatch(boundaryNames, 'boundaryName'),
+    [boundaryNames],
+  );
+
+  // Darker variant for text labels so light palette colors stay readable.
+  const labelColor = useMemo(
+    () => buildColorMatch(boundaryNames, 'boundaryName', darkenHex),
+    [boundaryNames],
+  );
+
+  // Tag parcels/labels with the barangay they belong to (point-in-polygon).
+  const taggedGeojson = useMemo(
+    () => tagWithBoundary(geojson, boundaryGeojson),
+    [geojson, boundaryGeojson],
+  );
+  const taggedTextGeojson = useMemo(
+    () => tagWithBoundary(textGeojson, boundaryGeojson),
+    [textGeojson, boundaryGeojson],
+  );
+
   const prevGeoFid = useRef<number | null>(null);
 
   useEffect(() => {
@@ -321,18 +547,18 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
   }, [searchInput]);
 
   const filteredTextGeojson = useMemo(() => {
-    if (!textGeojson || !search) return textGeojson;
+    if (!taggedTextGeojson || !search) return taggedTextGeojson;
     return {
-      ...textGeojson,
-      features: textGeojson.features.filter((f) => matches(f, search)),
+      ...taggedTextGeojson,
+      features: taggedTextGeojson.features.filter((f) => matches(f, search)),
     };
-  }, [textGeojson, search]);
+  }, [taggedTextGeojson, search]);
 
   const directionGeojson = useMemo(() => {
-    if (!geojson) return null;
+    if (!taggedGeojson) return null;
     return {
       type: 'FeatureCollection' as const,
-      features: geojson.features
+      features: taggedGeojson.features
         .map((f) => {
           const dir = computeLineDirection(
             f.geometry as GeoJSON.MultiLineString,
@@ -458,10 +684,46 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
             }
           }}
         >
+          <Source id="boundary-data" type="geojson" data={boundaryGeojson}>
+            <Layer
+              id="boundary-fill"
+              type="fill"
+              paint={{
+                'fill-color': boundaryColor,
+                'fill-opacity': 0.06,
+              }}
+            />
+            <Layer
+              id="boundary-line"
+              type="line"
+              paint={{
+                'line-color': boundaryColor,
+                'line-width': 2,
+                'line-dasharray': [2, 1.5],
+                'line-opacity': 0.85,
+              }}
+            />
+            <Layer
+              id="boundary-label"
+              type="symbol"
+              layout={{
+                'text-field': ['get', 'name'],
+                'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+                'text-size': 13,
+                'text-anchor': 'center',
+                'text-allow-overlap': false,
+              }}
+              paint={{
+                'text-color': boundaryLabelColor,
+                'text-halo-color': '#ffffff',
+                'text-halo-width': 1.5,
+              }}
+            />
+          </Source>
           <Source
             id="geojson-data"
             type="geojson"
-            data={geojson}
+            data={taggedGeojson}
             promoteId="fid"
           >
             <Layer
@@ -472,7 +734,7 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
                   'case',
                   ['boolean', ['feature-state', 'selected'], false],
                   '#ff8000',
-                  '#0080ff',
+                  featureColor,
                 ],
                 'fill-opacity': [
                   'case',
@@ -490,7 +752,7 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
                   'case',
                   ['boolean', ['feature-state', 'selected'], false],
                   '#ff8000',
-                  '#0066cc',
+                  featureColor,
                 ],
                 'line-width': [
                   'case',
@@ -517,7 +779,7 @@ const MapView = ({ geojson, textGeojson }: MapViewProps) => {
                   'text-offset': [0, 0.8],
                 }}
                 paint={{
-                  'text-color': '#000000',
+                  'text-color': labelColor,
                   'text-halo-color': '#ffffff',
                   'text-halo-width': 1.5,
                 }}

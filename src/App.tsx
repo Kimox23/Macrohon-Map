@@ -8,6 +8,7 @@ const MapView = lazy(() => import('./MapView'));
 const DATA_URLS = {
   geojson: `${import.meta.env.BASE_URL}data/Macrohon.json`,
   textGeojson: `${import.meta.env.BASE_URL}data/Macrohon_Text.json`,
+  boundaryGeojson: `${import.meta.env.BASE_URL}data/Macrohon_Boundary.json`,
 };
 
 const LoadingScreen = ({ message }: { message: string }) => (
@@ -41,17 +42,23 @@ const App = () => {
     Geometry,
     GeoJsonProperties
   > | null>(null);
+  const [boundaryGeojson, setBoundaryGeojson] = useState<FeatureCollection<
+    Geometry,
+    GeoJsonProperties
+  > | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       fetch(DATA_URLS.geojson).then((r) => r.json()),
       fetch(DATA_URLS.textGeojson).then((r) => r.json()),
+      fetch(DATA_URLS.boundaryGeojson).then((r) => r.json()),
     ])
-      .then(([g, t]) => {
+      .then(([g, t, b]) => {
         if (cancelled) return;
         setGeojson(g);
         setTextGeojson(t);
+        setBoundaryGeojson(b);
       })
       .catch((err) => console.error('Failed to load map data', err));
     return () => {
@@ -59,7 +66,7 @@ const App = () => {
     };
   }, []);
 
-  if (!geojson || !textGeojson) {
+  if (!geojson || !textGeojson || !boundaryGeojson) {
     return <LoadingScreen message="Loading map data…" />;
   }
 
@@ -67,7 +74,11 @@ const App = () => {
     <>
       <title>Macrohon Cadastral</title>
       <Suspense fallback={<LoadingScreen message="Preparing map…" />}>
-        <MapView geojson={geojson} textGeojson={textGeojson} />
+        <MapView
+          geojson={geojson}
+          textGeojson={textGeojson}
+          boundaryGeojson={boundaryGeojson}
+        />
       </Suspense>
     </>
   );
