@@ -5,4 +5,13 @@ import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss';
 // Docs: https://rsbuild.rs/config/
 export default defineConfig({
   plugins: [pluginReact(), pluginTailwindcss()],
+  server: {
+    proxy: {
+      '/fonts': {
+        target: 'https://fonts.openmaptiles.org',
+        changeOrigin: true,
+        pathRewrite: { '^/fonts': '' },
+      },
+    },
+  },
 });

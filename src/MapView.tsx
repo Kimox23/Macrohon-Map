@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 const LIGHT_STYLE = {
   version: 8 as const,
-  glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+  glyphs: '/fonts/{fontstack}/{range}.pbf',
   sources: {
     'carto-tiles': {
       type: 'raster',
@@ -38,12 +38,12 @@ const LIGHT_STYLE = {
 
 const MAPTILER_SATELLITE_STYLE = {
   version: 8 as const,
-  glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+  glyphs: '/fonts/{fontstack}/{range}.pbf',
   sources: {
     'maptiler-tiles': {
       type: 'raster',
       tiles: [
-        'https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=' +
+        'https://api.maptiler.com/maps/hybrid-v4/{z}/{x}/{y}@2x.jpg?key=' +
         import.meta.env.PUBLIC_MAPTILER_API_KEY,
       ],
       tileSize: 256,
@@ -57,6 +57,31 @@ const MAPTILER_SATELLITE_STYLE = {
       source: 'maptiler-tiles',
       minzoom: 0,
       maxzoom: 19,
+    },
+  ],
+};
+
+const MAPTILER_OUTDOOR_STYLE = {
+  version: 8 as const,
+  glyphs: '/fonts/{fontstack}/{range}.pbf',
+  sources: {
+    'maptiler-tiles': {
+      type: 'raster',
+      tiles: [
+        'https://api.maptiler.com/maps/outdoor-v4/{z}/{x}/{y}@2x.png?key=' +
+        import.meta.env.PUBLIC_MAPTILER_API_KEY,
+      ],
+      tileSize: 512,
+      attribution: '© MapTiler © OpenStreetMap contributors',
+    },
+  },
+  layers: [
+    {
+      id: 'maptiler-tiles-layer',
+      type: 'raster',
+      source: 'maptiler-tiles',
+      minzoom: 0,
+      maxzoom: 22,
     },
   ],
 };
@@ -127,28 +152,6 @@ function matches(feature: GeoJSON.Feature, q: string): boolean {
     if (String(v).toLowerCase().includes(lower)) return true;
   }
   return false;
-}
-
-function computeBounds(
-  fc: GeoJSON.FeatureCollection | undefined,
-): [number, number, number, number] | null {
-  if (!fc) return null;
-  let minLon = Infinity,
-    minLat = Infinity,
-    maxLon = -Infinity,
-    maxLat = -Infinity;
-  let found = false;
-  for (const f of fc.features) {
-    const b = getFeatureBounds(f);
-    if (b) {
-      found = true;
-      if (b[0] < minLon) minLon = b[0];
-      if (b[1] < minLat) minLat = b[1];
-      if (b[2] > maxLon) maxLon = b[2];
-      if (b[3] > maxLat) maxLat = b[3];
-    }
-  }
-  return found ? [minLon, minLat, maxLon, maxLat] : null;
 }
 
 function findNearestFeature(
@@ -236,7 +239,7 @@ function getBoundaryNames(fc: GeoJSON.FeatureCollection): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
   for (const f of fc.features) {
-    const name = f.properties?.name;
+    const name = f.properties?.Name;
     if (typeof name === 'string' && !seen.has(name)) {
       seen.add(name);
       names.push(name);
@@ -304,8 +307,7 @@ function pointInRing(lon: number, lat: number, ring: number[][]): boolean {
     const xj = ring[j][0];
     const yj = ring[j][1];
     const intersect =
-      yi > lat !== yj > lat &&
-      lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+      yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
     if (intersect) inside = !inside;
   }
   return inside;
@@ -355,7 +357,7 @@ function findBoundaryName(
   boundary: GeoJSON.FeatureCollection,
 ): string | null {
   for (const f of boundary.features) {
-    const name = f.properties?.name;
+    const name = f.properties?.Name;
     if (typeof name !== 'string') continue;
     const geom = f.geometry;
     if (geom?.type === 'MultiPolygon') {
@@ -380,9 +382,7 @@ function tagWithBoundary(
     ...fc,
     features: fc.features.map((f) => {
       const pt = representativePoint(f);
-      const boundaryName = pt
-        ? findBoundaryName(pt[0], pt[1], boundary)
-        : null;
+      const boundaryName = pt ? findBoundaryName(pt[0], pt[1], boundary) : null;
       return {
         ...f,
         properties: { ...f.properties, boundaryName },
@@ -403,13 +403,15 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
       ? !window.matchMedia('(max-width: 1023px)').matches
       : true,
   );
-  const [mapStyle, setMapStyle] = useState<'light' | 'maptiler-satellite'>(
-    () => {
-      if (typeof window === 'undefined') return 'light';
-      const stored = window.localStorage.getItem('mapStyle');
-      return stored === 'maptiler-satellite' ? 'maptiler-satellite' : 'light';
-    },
-  );
+  const [mapStyle, setMapStyle] = useState<
+    'light' | 'maptiler-satellite' | 'maptiler-outdoor'
+  >(() => {
+    if (typeof window === 'undefined') return 'light';
+    const stored = window.localStorage.getItem('mapStyle');
+    if (stored === 'maptiler-satellite') return 'maptiler-satellite';
+    if (stored === 'maptiler-outdoor') return 'maptiler-outdoor';
+    return 'light';
+  });
 
   useEffect(() => {
     window.localStorage.setItem('mapStyle', mapStyle);
@@ -479,23 +481,19 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
     setSearch('');
   };
 
-  const fullBounds = useMemo(() => {
-    return computeBounds(geojson) || computeBounds(textGeojson);
-  }, [geojson, textGeojson]);
-
   const boundaryNames = useMemo(
     () => getBoundaryNames(boundaryGeojson),
     [boundaryGeojson],
   );
 
   const boundaryColor = useMemo(
-    () => buildColorMatch(boundaryNames, 'name'),
+    () => buildColorMatch(boundaryNames, 'Name'),
     [boundaryNames],
   );
 
   // Darker variant for boundary name labels.
   const boundaryLabelColor = useMemo(
-    () => buildColorMatch(boundaryNames, 'name', darkenHex),
+    () => buildColorMatch(boundaryNames, 'Name', darkenHex),
     [boundaryNames],
   );
 
@@ -574,7 +572,7 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
         })
         .filter(Boolean) as GeoJSON.Feature[],
     };
-  }, [geojson]);
+  }, [taggedGeojson]);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -634,13 +632,19 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
       <select
         value={mapStyle}
         onChange={(e) =>
-          setMapStyle(e.target.value as 'light' | 'maptiler-satellite')
+          setMapStyle(
+            e.target.value as
+            | 'light'
+            | 'maptiler-satellite'
+            | 'maptiler-outdoor',
+          )
         }
         className="absolute top-2.5 right-2.5 z-20 rounded bg-white/90 px-2 py-1 shadow text-xs font-medium sm:w-[250px] lg:left-2.5 lg:right-auto lg:top-14"
         aria-label="Map style"
       >
-        <option value="light">Carto Map</option>
-        <option value="maptiler-satellite">MapTiler Satellite</option>
+        <option value="light">Light</option>
+        <option value="maptiler-satellite">Satellite</option>
+        <option value="maptiler-outdoor">Topography</option>
       </select>
       <div className="absolute inset-0">
         <MapGL
@@ -651,14 +655,16 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
             zoom: 12,
           }}
           projection={{
-            type: "globe"
+            type: 'globe',
           }}
           maxTileCacheSize={100_000_000}
           style={{ width: '100%', height: '100%' }}
           mapStyle={
             (mapStyle === 'light'
               ? LIGHT_STYLE
-              : MAPTILER_SATELLITE_STYLE) as StyleSpecification
+              : mapStyle === 'maptiler-outdoor'
+                ? MAPTILER_OUTDOOR_STYLE
+                : MAPTILER_SATELLITE_STYLE) as StyleSpecification
           }
           dragRotate={true}
           onLoad={handleMapLoad}
@@ -707,7 +713,7 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
               id="boundary-label"
               type="symbol"
               layout={{
-                'text-field': ['get', 'name'],
+                'text-field': ['get', 'Name'],
                 'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
                 'text-size': 13,
                 'text-anchor': 'center',
@@ -824,8 +830,8 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
       )}
       <aside
         className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${sidebarOpen
-            ? 'translate-y-0 max-lg:translate-y-0'
-            : 'max-lg:translate-y-full lg:-translate-x-full'
+          ? 'translate-y-0 max-lg:translate-y-0'
+          : 'max-lg:translate-y-full lg:-translate-x-full'
           }`}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
@@ -870,8 +876,8 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
                     height: ITEM_HEIGHT,
                   }}
                   className={`left-0 right-0 block border-b border-gray-100 px-3 py-2 text-left text-xs hover:bg-gray-100 ${isSelected
-                      ? 'bg-blue-50 ring-2 ring-inset ring-blue-500'
-                      : ''
+                    ? 'bg-blue-50 ring-2 ring-inset ring-blue-500'
+                    : ''
                     }`}
                 >
                   <div className="truncate font-medium text-gray-900">
