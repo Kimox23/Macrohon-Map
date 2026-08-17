@@ -13,6 +13,7 @@
   "dependencies": {
     "maplibre-compass-pro": "^0.6.0",
     "maplibre-gl": "^5.24.0",
+    "pmtiles": "^4.5.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-icons": "^5.7.0",

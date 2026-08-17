@@ -7,7 +7,7 @@ import type {
   GeoJSONFeature,
   StyleSpecification,
 } from 'maplibre-gl';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const LIGHT_STYLE = {
   version: 8 as const,
@@ -44,7 +44,7 @@ const MAPTILER_SATELLITE_STYLE = {
       type: 'raster',
       tiles: [
         'https://api.maptiler.com/maps/hybrid-v4/{z}/{x}/{y}@2x.jpg?key=' +
-        import.meta.env.PUBLIC_MAPTILER_API_KEY,
+          import.meta.env.PUBLIC_MAPTILER_API_KEY,
       ],
       tileSize: 256,
       attribution: '© MapTiler © OpenStreetMap contributors',
@@ -69,7 +69,7 @@ const MAPTILER_OUTDOOR_STYLE = {
       type: 'raster',
       tiles: [
         'https://api.maptiler.com/maps/outdoor-v4/{z}/{x}/{y}@2x.png?key=' +
-        import.meta.env.PUBLIC_MAPTILER_API_KEY,
+          import.meta.env.PUBLIC_MAPTILER_API_KEY,
       ],
       tileSize: 512,
       attribution: '© MapTiler © OpenStreetMap contributors',
@@ -173,42 +173,6 @@ function findNearestFeature(
     }
   }
   return best;
-}
-
-function computeLineDirection(
-  geom: GeoJSON.MultiLineString,
-): 'N' | 'S' | 'E' | 'W' | null {
-  const lines = geom.coordinates;
-  if (!lines.length) return null;
-
-  let maxLen = -Infinity;
-  let bestBearing = 0;
-
-  for (const line of lines) {
-    for (let i = 1; i < line.length; i++) {
-      const dx = line[i][0] - line[i - 1][0];
-      const dy = line[i][1] - line[i - 1][1];
-      const len = dx * dx + dy * dy;
-      if (len > maxLen) {
-        maxLen = len;
-        const dLon = (dx * Math.PI) / 180;
-        const lat1 = (line[i - 1][1] * Math.PI) / 180;
-        const lat2 = (line[i][1] * Math.PI) / 180;
-        const y = Math.sin(dLon) * Math.cos(lat2);
-        const x =
-          Math.cos(lat1) * Math.sin(lat2) -
-          Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-        bestBearing = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-      }
-    }
-  }
-
-  if (maxLen <= 0) return null;
-
-  if (bestBearing >= 315 || bestBearing < 45) return 'N';
-  if (bestBearing >= 45 && bestBearing < 135) return 'E';
-  if (bestBearing >= 135 && bestBearing < 225) return 'S';
-  return 'W';
 }
 
 const BOUNDARY_PALETTE = [
@@ -413,9 +377,62 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
     return 'light';
   });
 
+  const [layerVisibility, setLayerVisibility] = useState<
+    Record<string, boolean>
+  >(() => {
+    if (typeof window === 'undefined')
+      return {
+        raster: true,
+        boundary: true,
+        parcels: true,
+        labels: true,
+      };
+    try {
+      const stored = window.localStorage.getItem('layerVisibility');
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return {
+      raster: true,
+      boundary: true,
+      parcels: true,
+      labels: true,
+    };
+  });
+
   useEffect(() => {
     window.localStorage.setItem('mapStyle', mapStyle);
   }, [mapStyle]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      'layerVisibility',
+      JSON.stringify(layerVisibility),
+    );
+  }, [layerVisibility]);
+
+  const applyLayerVisibility = useCallback(() => {
+    const instance = mapRef.current?.getMap();
+    if (!instance) return;
+    const vis = layerVisibility;
+    const updates: [string, boolean][] = [
+      ['raster-layer', vis.raster],
+      ['boundary-fill', vis.boundary],
+      ['boundary-line', vis.boundary],
+      ['boundary-label', vis.boundary],
+      ['geojson-fill', vis.parcels],
+      ['geojson-line', vis.parcels],
+      ['text-label', vis.labels],
+    ];
+    for (const [id, visible] of updates) {
+      if (instance.getLayer(id)) {
+        instance.setLayoutProperty(
+          id,
+          'visibility',
+          visible ? 'visible' : 'none',
+        );
+      }
+    }
+  }, [layerVisibility]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1023px)');
@@ -423,6 +440,16 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
   }, []);
+
+  const RASTER_IMAGE_URL = '/data/Macrhon_Raster.png';
+  const RASTER_BOUNDS = [
+    [124.83901247706987, 10.155705079953057],
+    [125.09486705143011, 10.155705079953057],
+    [125.09486705143011, 10.025471809786758],
+    [124.83901247706987, 10.025471809786758],
+  ] as const;
+
+  const [mapReady, setMapReady] = useState(false);
 
   const handleMapLoad = () => {
     const instance = mapRef.current?.getMap();
@@ -432,7 +459,13 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
       displayDirection: true,
     });
     instance.addControl(compassRef.current, 'top-right');
+    setMapReady(true);
   };
+
+  useEffect(() => {
+    if (!mapReady) return;
+    applyLayerVisibility();
+  }, [mapReady, applyLayerVisibility]);
 
   const selectFeature = (feature: GeoJSON.Feature) => {
     const instance = mapRef.current?.getMap();
@@ -552,28 +585,6 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
     };
   }, [taggedTextGeojson, search]);
 
-  const directionGeojson = useMemo(() => {
-    if (!taggedGeojson) return null;
-    return {
-      type: 'FeatureCollection' as const,
-      features: taggedGeojson.features
-        .map((f) => {
-          const dir = computeLineDirection(
-            f.geometry as GeoJSON.MultiLineString,
-          );
-          if (!dir) return null;
-          return {
-            ...f,
-            properties: {
-              ...f.properties,
-              direction: dir,
-            },
-          };
-        })
-        .filter(Boolean) as GeoJSON.Feature[],
-    };
-  }, [taggedGeojson]);
-
   const listRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(0);
@@ -634,9 +645,9 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
         onChange={(e) =>
           setMapStyle(
             e.target.value as
-            | 'light'
-            | 'maptiler-satellite'
-            | 'maptiler-outdoor',
+              | 'light'
+              | 'maptiler-satellite'
+              | 'maptiler-outdoor',
           )
         }
         className="absolute top-2.5 right-2.5 z-20 rounded bg-white/90 px-2 py-1 shadow text-xs font-medium sm:w-[250px] lg:left-2.5 lg:right-auto lg:top-14"
@@ -690,10 +701,30 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
             }
           }}
         >
+          <Source
+            id="raster-data"
+            type="image"
+            url={RASTER_IMAGE_URL}
+            coordinates={RASTER_BOUNDS}
+          >
+            <Layer
+              id="raster-layer"
+              type="raster"
+              layout={{
+                visibility: layerVisibility.raster ? 'visible' : 'none',
+              }}
+              paint={{
+                'raster-opacity': 0.7,
+              }}
+            />
+          </Source>
           <Source id="boundary-data" type="geojson" data={boundaryGeojson}>
             <Layer
               id="boundary-fill"
               type="fill"
+              layout={{
+                visibility: layerVisibility.boundary ? 'visible' : 'none',
+              }}
               paint={{
                 'fill-color': boundaryColor,
                 'fill-opacity': 0.06,
@@ -702,6 +733,9 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
             <Layer
               id="boundary-line"
               type="line"
+              layout={{
+                visibility: layerVisibility.boundary ? 'visible' : 'none',
+              }}
               paint={{
                 'line-color': boundaryColor,
                 'line-width': 2,
@@ -718,6 +752,7 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
                 'text-size': 13,
                 'text-anchor': 'center',
                 'text-allow-overlap': false,
+                visibility: layerVisibility.boundary ? 'visible' : 'none',
               }}
               paint={{
                 'text-color': boundaryLabelColor,
@@ -735,6 +770,9 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
             <Layer
               id="geojson-fill"
               type="fill"
+              layout={{
+                visibility: layerVisibility.parcels ? 'visible' : 'none',
+              }}
               paint={{
                 'fill-color': [
                   'case',
@@ -753,6 +791,9 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
             <Layer
               id="geojson-line"
               type="line"
+              layout={{
+                visibility: layerVisibility.parcels ? 'visible' : 'none',
+              }}
               paint={{
                 'line-color': [
                   'case',
@@ -783,35 +824,12 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
                   'text-size': 12,
                   'text-anchor': 'top',
                   'text-offset': [0, 0.8],
+                  visibility: layerVisibility.labels ? 'visible' : 'none',
                 }}
                 paint={{
                   'text-color': labelColor,
                   'text-halo-color': '#ffffff',
                   'text-halo-width': 1.5,
-                }}
-              />
-            </Source>
-          )}
-          {directionGeojson && (
-            <Source id="direction-data" type="geojson" data={directionGeojson}>
-              <Layer
-                id="direction-label"
-                type="symbol"
-                minzoom={16}
-                layout={{
-                  'text-field': ['get', 'direction'],
-                  'text-font': [
-                    'Open Sans Regular',
-                    'Arial Unicode MS Regular',
-                  ],
-                  'text-size': 10,
-                  'text-anchor': 'center',
-                  'text-allow-overlap': false,
-                }}
-                paint={{
-                  'text-color': '#666666',
-                  'text-halo-color': '#ffffff',
-                  'text-halo-width': 1,
                 }}
               />
             </Source>
@@ -829,10 +847,11 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
         </button>
       )}
       <aside
-        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${sidebarOpen
-          ? 'translate-y-0 max-lg:translate-y-0'
-          : 'max-lg:translate-y-full lg:-translate-x-full'
-          }`}
+        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${
+          sidebarOpen
+            ? 'translate-y-0 max-lg:translate-y-0'
+            : 'max-lg:translate-y-full lg:-translate-x-full'
+        }`}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
           <span className="text-sm font-semibold">Markers ({total})</span>
@@ -856,6 +875,29 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
             </button>
           </div>
         </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 border-b px-4 py-2 text-xs">
+          {[
+            { key: 'raster', label: 'Raster' },
+            { key: 'boundary', label: 'Boundary' },
+            { key: 'parcels', label: 'Parcels' },
+            { key: 'labels', label: 'Labels' },
+          ].map(({ key, label }) => (
+            <label key={key} className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={layerVisibility[key]}
+                onChange={(e) =>
+                  setLayerVisibility((prev) => ({
+                    ...prev,
+                    [key]: e.target.checked,
+                  }))
+                }
+                className="h-3.5 w-3.5 rounded border-gray-300"
+              />
+              <span className="text-gray-700">{label}</span>
+            </label>
+          ))}
+        </div>
         <div
           ref={listRef}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
@@ -875,10 +917,11 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
                     top: index * ITEM_HEIGHT,
                     height: ITEM_HEIGHT,
                   }}
-                  className={`left-0 right-0 block border-b border-gray-100 px-3 py-2 text-left text-xs hover:bg-gray-100 ${isSelected
-                    ? 'bg-blue-50 ring-2 ring-inset ring-blue-500'
-                    : ''
-                    }`}
+                  className={`left-0 right-0 block border-b border-gray-100 px-3 py-2 text-left text-xs hover:bg-gray-100 ${
+                    isSelected
+                      ? 'bg-blue-50 ring-2 ring-inset ring-blue-500'
+                      : ''
+                  }`}
                 >
                   <div className="truncate font-medium text-gray-900">
                     {String(
