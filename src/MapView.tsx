@@ -9,45 +9,16 @@ import type {
 } from 'maplibre-gl';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-const LIGHT_STYLE = {
-  version: 8 as const,
-  glyphs: '/fonts/{fontstack}/{range}.pbf',
-  sources: {
-    'carto-tiles': {
-      type: 'raster',
-      tiles: ['https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '© OpenStreetMap contributors © CARTO',
-    },
-  },
-  layers: [
-    {
-      id: 'background',
-      type: 'background',
-      paint: { 'background-color': '#f2efe9' },
-    },
-    {
-      id: 'carto-tiles-layer',
-      type: 'raster',
-      source: 'carto-tiles',
-      minzoom: 0,
-      maxzoom: 19,
-    },
-  ],
-};
-
-const MAPTILER_SATELLITE_STYLE = {
+const MAPTILER_OPENSTREETMAP_STYLE = {
   version: 8 as const,
   glyphs: '/fonts/{fontstack}/{range}.pbf',
   sources: {
     'maptiler-tiles': {
       type: 'raster',
-      tiles: [
-        'https://api.maptiler.com/maps/hybrid-v4/{z}/{x}/{y}@2x.jpg?key=' +
-          import.meta.env.PUBLIC_MAPTILER_API_KEY,
-      ],
-      tileSize: 256,
-      attribution: '© MapTiler © OpenStreetMap contributors',
+      tiles: ['https://api.maptiler.com/maps/openstreetmap/{z}/{x}/{y}.jpg?key=' +
+        import.meta.env.PUBLIC_MAPTILER_API_KEY,],
+      tileSize: 512,
+      attribution: '© OpenStreetMap contributors',
     },
   },
   layers: [
@@ -55,6 +26,33 @@ const MAPTILER_SATELLITE_STYLE = {
       id: 'maptiler-tiles-layer',
       type: 'raster',
       source: 'maptiler-tiles',
+      minzoom: 0,
+      maxzoom: 19,
+    },
+  ],
+};
+
+const GOOGLE_SATELLITE_STYLE = {
+  version: 8 as const,
+  glyphs: '/fonts/{fontstack}/{range}.pbf',
+  sources: {
+    'google-satellite-tiles': {
+      type: 'raster',
+      tiles: [
+        'https://mt0.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        'https://mt2.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        'https://mt3.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
+      ],
+      tileSize: 256,
+      attribution: '© Google Maps',
+    },
+  },
+  layers: [
+    {
+      id: 'google-satellite-layer',
+      type: 'raster',
+      source: 'google-satellite-tiles',
       minzoom: 0,
       maxzoom: 19,
     },
@@ -69,7 +67,7 @@ const MAPTILER_OUTDOOR_STYLE = {
       type: 'raster',
       tiles: [
         'https://api.maptiler.com/maps/outdoor-v4/{z}/{x}/{y}@2x.png?key=' +
-          import.meta.env.PUBLIC_MAPTILER_API_KEY,
+        import.meta.env.PUBLIC_MAPTILER_API_KEY,
       ],
       tileSize: 512,
       attribution: '© MapTiler © OpenStreetMap contributors',
@@ -390,7 +388,7 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
     try {
       const stored = window.localStorage.getItem('layerVisibility');
       if (stored) return JSON.parse(stored);
-    } catch {}
+    } catch { }
     return {
       raster: true,
       boundary: true,
@@ -645,9 +643,9 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
         onChange={(e) =>
           setMapStyle(
             e.target.value as
-              | 'light'
-              | 'maptiler-satellite'
-              | 'maptiler-outdoor',
+            | 'light'
+            | 'maptiler-satellite'
+            | 'maptiler-outdoor',
           )
         }
         className="absolute top-2.5 right-2.5 z-20 rounded bg-white/90 px-2 py-1 shadow text-xs font-medium sm:w-[250px] lg:left-2.5 lg:right-auto lg:top-14"
@@ -672,10 +670,10 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
           style={{ width: '100%', height: '100%' }}
           mapStyle={
             (mapStyle === 'light'
-              ? LIGHT_STYLE
+              ? MAPTILER_OPENSTREETMAP_STYLE
               : mapStyle === 'maptiler-outdoor'
                 ? MAPTILER_OUTDOOR_STYLE
-                : MAPTILER_SATELLITE_STYLE) as StyleSpecification
+                : GOOGLE_SATELLITE_STYLE) as StyleSpecification
           }
           dragRotate={true}
           onLoad={handleMapLoad}
@@ -847,11 +845,10 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
         </button>
       )}
       <aside
-        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${
-          sidebarOpen
-            ? 'translate-y-0 max-lg:translate-y-0'
-            : 'max-lg:translate-y-full lg:-translate-x-full'
-        }`}
+        className={`absolute z-10 flex flex-col bg-white/95 shadow-xl transition-transform duration-300 max-lg:inset-x-0 max-lg:bottom-0 max-lg:top-auto max-lg:h-[45%] max-lg:w-auto lg:right-0 lg:top-0 lg:h-full lg:w-80 ${sidebarOpen
+          ? 'translate-y-0 max-lg:translate-y-0'
+          : 'max-lg:translate-y-full lg:-translate-x-full'
+          }`}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
           <span className="text-sm font-semibold">Markers ({total})</span>
@@ -917,11 +914,10 @@ const MapView = ({ geojson, textGeojson, boundaryGeojson }: MapViewProps) => {
                     top: index * ITEM_HEIGHT,
                     height: ITEM_HEIGHT,
                   }}
-                  className={`left-0 right-0 block border-b border-gray-100 px-3 py-2 text-left text-xs hover:bg-gray-100 ${
-                    isSelected
-                      ? 'bg-blue-50 ring-2 ring-inset ring-blue-500'
-                      : ''
-                  }`}
+                  className={`left-0 right-0 block border-b border-gray-100 px-3 py-2 text-left text-xs hover:bg-gray-100 ${isSelected
+                    ? 'bg-blue-50 ring-2 ring-inset ring-blue-500'
+                    : ''
+                    }`}
                 >
                   <div className="truncate font-medium text-gray-900">
                     {String(
